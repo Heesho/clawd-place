@@ -3,7 +3,6 @@
 import clsx from "clsx";
 import {
   useEffect,
-  useMemo,
   useRef,
   useState,
   type MouseEvent,
@@ -13,7 +12,6 @@ import { io, type Socket } from "socket.io-client";
 
 const CANVAS_WIDTH = 1000;
 const CANVAS_HEIGHT = 1000;
-const MAX_ACTIVITY = 50;
 const HEATMAP_CELL_SIZE = 10;
 const HEATMAP_COLS = Math.ceil(CANVAS_WIDTH / HEATMAP_CELL_SIZE);
 const HEATMAP_ROWS = Math.ceil(CANVAS_HEIGHT / HEATMAP_CELL_SIZE);
@@ -42,17 +40,8 @@ type PixelEvent = {
 type HoverInfo = {
   x: number;
   y: number;
-  color: string;
   agent: string;
 };
-
-type ActivityItem = {
-  id: string;
-  text: string;
-  ts: number;
-};
-
-type FilterStatus = "idle" | "active" | "nomatch";
 
 function base64ToUint8(base64: string): Uint8Array {
   const binary = atob(base64);
@@ -73,10 +62,6 @@ function hexToRgb(hex: string): [number, number, number] {
 
 function hashToHex(hash: bigint): string {
   return hash.toString(16).padStart(16, "0");
-}
-
-function buildAgentList(map: Map<string, string>): string[] {
-  return Array.from(new Set(map.values())).sort((a, b) => a.localeCompare(b));
 }
 
 function lerp(start: number, end: number, t: number): number {
@@ -110,10 +95,6 @@ export default function CanvasExperience() {
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const imageDataRef = useRef<ImageData | null>(null);
-  const filterCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const filterCtxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const filterImageRef = useRef<ImageData | null>(null);
-  const filterTargetRef = useRef<bigint | null>(null);
   const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const heatmapCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const heatmapImageRef = useRef<ImageData | null>(null);
@@ -136,18 +117,14 @@ export default function CanvasExperience() {
     startY: 0,
     initialized: false
   });
-  const agentFilterRef = useRef("");
 
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("offline");
   const [hover, setHover] = useState<HoverInfo | null>(null);
-  const [activity, setActivity] = useState<ActivityItem[]>([]);
-  const [agentOptions, setAgentOptions] = useState<string[]>([]);
-  const [agentFilter, setAgentFilter] = useState("");
-  const [filterStatus, setFilterStatus] = useState<FilterStatus>("idle");
+  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [heatmapEnabled, setHeatmapEnabled] = useState(false);
-
-  const palettePreview = useMemo(() => paletteRef.current.slice(0, 16), [loading]);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const draw = () => {
     const canvas = canvasRef.current;
@@ -163,7 +140,6 @@ export default function CanvasExperience() {
 
     const { scale, offsetX, offsetY } = viewRef.current;
     const dpr = dprRef.current;
-    const filterCanvas = filterCanvasRef.current;
     const heatmapCanvas = heatmapCanvasRef.current;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -171,14 +147,7 @@ export default function CanvasExperience() {
     ctx.imageSmoothingEnabled = false;
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
-    if (filterTargetRef.current && filterCanvas) {
-      ctx.globalAlpha = 0.25;
-      ctx.drawImage(offscreen, 0, 0);
-      ctx.globalAlpha = 1;
-      ctx.drawImage(filterCanvas, 0, 0);
-    } else {
-      ctx.drawImage(offscreen, 0, 0);
-    }
+    ctx.drawImage(offscreen, 0, 0);
 
     if (heatmapEnabledRef.current && heatmapCanvas) {
       const previousComposite = ctx.globalCompositeOperation;
@@ -198,7 +167,7 @@ export default function CanvasExperience() {
       return;
     }
     const rect = canvas.getBoundingClientRect();
-    const scale = Math.min(rect.width / width, rect.height / height) * 0.9;
+    const scale = Math.min(rect.width / width, rect.height / height) * 0.95;
     const offsetX = (rect.width - width * scale) / 2;
     const offsetY = (rect.height - height * scale) / 2;
     viewRef.current = {
@@ -253,13 +222,12 @@ export default function CanvasExperience() {
     }
 
     const index = y * CANVAS_WIDTH + x;
-    const colorIndex = colors[index];
-    const color = paletteRef.current[colorIndex] ?? "#000000";
     const agentHash = agents[index];
     const agentHex = hashToHex(agentHash);
-    const agent = agentMapRef.current.get(agentHex) ?? "Unknown agent";
+    const agent = agentMapRef.current.get(agentHex) ?? "Unknown";
 
-    setHover({ x, y, color, agent });
+    setHover({ x, y, agent });
+    setHoverPos({ x: clientX, y: clientY });
   };
 
   const renderHeatmap = () => {
@@ -315,57 +283,6 @@ export default function CanvasExperience() {
     }
   };
 
-  const rebuildFilterCanvas = (target: bigint) => {
-    const colors = colorsRef.current;
-    const agents = agentsRef.current;
-    const filterCtx = filterCtxRef.current;
-    const filterImage = filterImageRef.current;
-    const paletteRgb = paletteRgbRef.current;
-
-    if (!colors || !agents || !filterCtx || !filterImage) {
-      return;
-    }
-
-    for (let i = 0; i < colors.length; i += 1) {
-      const offset = i * 4;
-      if (agents[i] === target) {
-        const [r, g, b] = paletteRgb[colors[i]] ?? [0, 0, 0];
-        filterImage.data[offset] = r;
-        filterImage.data[offset + 1] = g;
-        filterImage.data[offset + 2] = b;
-        filterImage.data[offset + 3] = 255;
-      } else {
-        filterImage.data[offset + 3] = 0;
-      }
-    }
-
-    filterCtx.putImageData(filterImage, 0, 0);
-  };
-
-  const applyAgentFilter = (agentId: string) => {
-    const trimmed = agentId.trim();
-    if (!trimmed) {
-      filterTargetRef.current = null;
-      setFilterStatus("idle");
-      draw();
-      return;
-    }
-
-    const entry = Array.from(agentMapRef.current.entries()).find(([, id]) => id === trimmed);
-    if (!entry) {
-      filterTargetRef.current = null;
-      setFilterStatus("nomatch");
-      draw();
-      return;
-    }
-
-    const target = BigInt(`0x${entry[0]}`);
-    filterTargetRef.current = target;
-    setFilterStatus("active");
-    rebuildFilterCanvas(target);
-    draw();
-  };
-
   const updatePixel = (event: PixelEvent) => {
     const colors = colorsRef.current;
     const agents = agentsRef.current;
@@ -388,15 +305,7 @@ export default function CanvasExperience() {
 
     const agentHash = BigInt(`0x${event.agent_hash}`);
     agents[index] = agentHash;
-
-    const existingAgent = agentMapRef.current.get(event.agent_hash);
     agentMapRef.current.set(event.agent_hash, event.agent_id);
-    if (!existingAgent || existingAgent !== event.agent_id) {
-      setAgentOptions(buildAgentList(agentMapRef.current));
-      if (agentFilterRef.current && filterTargetRef.current === null) {
-        applyAgentFilter(agentFilterRef.current);
-      }
-    }
 
     const pixelOffset = index * 4;
     const [r, g, b] = paletteRgb[colorIndex] ?? [0, 0, 0];
@@ -407,35 +316,9 @@ export default function CanvasExperience() {
 
     offscreenCtx.putImageData(imageData, 0, 0, event.x, event.y, 1, 1);
 
-    const filterTarget = filterTargetRef.current;
-    if (filterTarget && filterImageRef.current && filterCtxRef.current) {
-      const filterOffset = index * 4;
-      if (agentHash === filterTarget) {
-        filterImageRef.current.data[filterOffset] = r;
-        filterImageRef.current.data[filterOffset + 1] = g;
-        filterImageRef.current.data[filterOffset + 2] = b;
-        filterImageRef.current.data[filterOffset + 3] = 255;
-      } else {
-        filterImageRef.current.data[filterOffset + 3] = 0;
-      }
-      filterCtxRef.current.putImageData(
-        filterImageRef.current,
-        0,
-        0,
-        event.x,
-        event.y,
-        1,
-        1
-      );
-    }
-
     pushHeatmapEvent(event.x, event.y);
     draw();
   };
-
-  useEffect(() => {
-    agentFilterRef.current = agentFilter.trim();
-  }, [agentFilter]);
 
   useEffect(() => {
     heatmapEnabledRef.current = heatmapEnabled;
@@ -444,13 +327,6 @@ export default function CanvasExperience() {
     }
     draw();
   }, [heatmapEnabled]);
-
-  useEffect(() => {
-    if (loading) {
-      return;
-    }
-    applyAgentFilter(agentFilter);
-  }, [agentFilter, loading, agentOptions]);
 
   useEffect(() => {
     const fetchCanvas = async () => {
@@ -476,7 +352,6 @@ export default function CanvasExperience() {
         paletteRef.current = data.palette;
         paletteRgbRef.current = data.palette.map(hexToRgb);
         agentMapRef.current = new Map(Object.entries(data.agent_map || {}));
-        setAgentOptions(buildAgentList(agentMapRef.current));
 
         const offscreen = document.createElement("canvas");
         offscreen.width = data.width;
@@ -499,15 +374,6 @@ export default function CanvasExperience() {
 
         offscreenCtx.putImageData(imageData, 0, 0);
 
-        const filterCanvas = document.createElement("canvas");
-        filterCanvas.width = data.width;
-        filterCanvas.height = data.height;
-        const filterCtx = filterCanvas.getContext("2d", { willReadFrequently: true });
-        if (!filterCtx) {
-          throw new Error("Unable to create filter context");
-        }
-        const filterImage = filterCtx.createImageData(data.width, data.height);
-
         const heatmapCanvas = document.createElement("canvas");
         heatmapCanvas.width = HEATMAP_COLS;
         heatmapCanvas.height = HEATMAP_ROWS;
@@ -520,9 +386,6 @@ export default function CanvasExperience() {
         offscreenRef.current = offscreen;
         offscreenCtxRef.current = offscreenCtx;
         imageDataRef.current = imageData;
-        filterCanvasRef.current = filterCanvas;
-        filterCtxRef.current = filterCtx;
-        filterImageRef.current = filterImage;
         heatmapCanvasRef.current = heatmapCanvas;
         heatmapCtxRef.current = heatmapCtx;
         heatmapImageRef.current = heatmapImage;
@@ -562,17 +425,6 @@ export default function CanvasExperience() {
       socket.on("disconnect", () => setConnection("offline"));
       socket.on("pixel", (event: PixelEvent) => {
         updatePixel(event);
-        setActivity((prev) => {
-          const next: ActivityItem[] = [
-            {
-              id: `${event.ts}-${event.x}-${event.y}`,
-              text: `${event.agent_id} placed ${event.color.toUpperCase()} at (${event.x}, ${event.y})`,
-              ts: event.ts
-            },
-            ...prev
-          ];
-          return next.slice(0, MAX_ACTIVITY);
-        });
       });
     };
 
@@ -597,7 +449,7 @@ export default function CanvasExperience() {
     const worldX = (mouseX - offsetX) / scale;
     const worldY = (mouseY - offsetY) / scale;
     const zoomFactor = event.deltaY < 0 ? 1.1 : 0.9;
-    const nextScale = Math.min(Math.max(scale * zoomFactor, 0.2), 40);
+    const nextScale = Math.min(Math.max(scale * zoomFactor, 0.5), 50);
 
     viewRef.current.scale = nextScale;
     viewRef.current.offsetX = mouseX - worldX * nextScale;
@@ -625,175 +477,166 @@ export default function CanvasExperience() {
     updateHover(event.clientX, event.clientY);
   };
 
-  const statusMessage =
-    filterStatus === "active"
-      ? `Focusing ${agentFilter.trim()}`
-      : filterStatus === "nomatch"
-        ? "No match yet. Waiting for that agent to appear."
-        : "Type an agent ID to isolate their pixels.";
+  const closeAllPanels = () => {
+    setSettingsOpen(false);
+    setInfoOpen(false);
+  };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <div className="rounded-3xl border border-white/10 bg-night/80 p-4 shadow-glow">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-3">
-          <div>
-            <p className="text-xs uppercase tracking-[0.25em] text-fog">Spectator Console</p>
-            <h1 className="text-2xl font-semibold text-white">Clawd.place Canvas</h1>
-          </div>
-          <div className="flex items-center gap-3 text-xs text-fog">
-            <span
-              className={clsx(
-                "h-2 w-2 rounded-full",
-                connection === "online" ? "bg-neon" : "bg-ember"
-              )}
-            />
-            {connection === "online" ? "Live feed" : "Reconnecting"}
-          </div>
+    <div
+      ref={containerRef}
+      className="fixed inset-0 bg-[#0b0d12] overflow-hidden"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) closeAllPanels();
+      }}
+    >
+      {/* Canvas */}
+      <canvas
+        ref={canvasRef}
+        className={clsx(
+          "absolute inset-0 w-full h-full cursor-grab active:cursor-grabbing",
+          loading && "opacity-0"
+        )}
+        onWheel={handleWheel}
+        onMouseDown={handleMouseDown}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={() => {
+          handleMouseUp();
+          setHover(null);
+        }}
+        onMouseMove={handleMouseMove}
+      />
+
+      {/* Loading state */}
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-white/50 text-sm font-mono">Loading canvas...</div>
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-4 text-xs text-fog">
-          <div className="font-mono">Grid: {CANVAS_WIDTH} x {CANVAS_HEIGHT}</div>
-          <div className="font-mono">Palette: {paletteRef.current.length || 16} colors</div>
-          <div className="flex items-center gap-2">
-            {palettePreview.map((color) => (
-              <span
-                key={color}
-                className="h-4 w-4 rounded-full border border-white/20"
-                style={{ backgroundColor: color }}
-              />
-            ))}
-          </div>
-        </div>
+      )}
+
+      {/* Hover tooltip */}
+      {hover && !loading && (
         <div
-          ref={containerRef}
-          className="relative mt-4 aspect-[4/3] w-full select-none overflow-hidden rounded-2xl border border-white/10 bg-ink/90 grid-overlay"
+          className="pointer-events-none fixed z-50 px-3 py-2 rounded-lg bg-[#0b0d12]/90 border border-white/10 font-mono text-xs"
+          style={{
+            left: hoverPos.x + 12,
+            top: hoverPos.y + 12
+          }}
         >
-          <canvas
-            ref={canvasRef}
-            className={clsx(
-              "h-full w-full cursor-grab active:cursor-grabbing",
-              loading && "opacity-50"
-            )}
-            onWheel={handleWheel}
-            onMouseDown={handleMouseDown}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={() => {
-              handleMouseUp();
-              setHover(null);
-            }}
-            onMouseMove={handleMouseMove}
-          />
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center text-sm text-fog">
-              Booting canvas stream...
-            </div>
-          )}
+          <div className="text-white/70">({hover.x}, {hover.y})</div>
+          <div className="text-white">{hover.agent}</div>
         </div>
+      )}
+
+      {/* Bottom-right controls */}
+      <div className="fixed bottom-6 right-6 flex items-center gap-3 z-40">
+        {/* Info button */}
+        <button
+          onClick={() => {
+            setInfoOpen(!infoOpen);
+            setSettingsOpen(false);
+          }}
+          className={clsx(
+            "w-10 h-10 rounded-full flex items-center justify-center transition-all",
+            "bg-white/5 hover:bg-white/10 border border-white/10",
+            infoOpen && "bg-white/10"
+          )}
+        >
+          <svg className="w-5 h-5 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        </button>
+
+        {/* Settings button */}
+        <button
+          onClick={() => {
+            setSettingsOpen(!settingsOpen);
+            setInfoOpen(false);
+          }}
+          className={clsx(
+            "w-10 h-10 rounded-full flex items-center justify-center transition-all",
+            "bg-white/5 hover:bg-white/10 border border-white/10",
+            settingsOpen && "bg-white/10"
+          )}
+        >
+          <svg className="w-5 h-5 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </div>
-      <aside className="flex h-full flex-col gap-4">
-        <div className="rounded-3xl border border-white/10 bg-night/80 p-4">
-          <p className="text-xs uppercase tracking-[0.25em] text-fog">Hover Intel</p>
-          {hover ? (
-            <div className="mt-3 space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <span className="text-fog">Coordinate</span>
-                <span className="font-mono text-white">({hover.x}, {hover.y})</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-fog">Color</span>
-                <span className="flex items-center gap-2 font-mono text-white">
-                  <span
-                    className="h-3 w-3 rounded-full border border-white/20"
-                    style={{ backgroundColor: hover.color }}
-                  />
-                  {hover.color.toUpperCase()}
-                </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-fog">Agent</span>
-                <span className="max-w-[180px] truncate font-mono text-white">
-                  {hover.agent}
-                </span>
-              </div>
-            </div>
-          ) : (
-            <p className="mt-3 text-sm text-fog">Move the cursor over the board.</p>
-          )}
-        </div>
-        <div className="rounded-3xl border border-white/10 bg-night/80 p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-[0.25em] text-fog">Vision Controls</p>
-            <span className="text-xs text-fog">{agentOptions.length} agents tracked</span>
-          </div>
-          <div className="mt-3 space-y-4 text-sm">
-            <div className="flex items-center justify-between">
-              <span className="text-fog">Heatmap overlay</span>
-              <button
-                type="button"
-                onClick={() => setHeatmapEnabled((prev) => !prev)}
-                className={clsx(
-                  "rounded-full px-3 py-1 text-xs font-semibold",
-                  heatmapEnabled ? "bg-neon text-ink" : "bg-white/10 text-white"
-                )}
-              >
-                {heatmapEnabled ? "On" : "Off"}
-              </button>
-            </div>
-            <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-fog">Agent Focus</p>
-              <div className="mt-2 flex gap-2">
-                <input
-                  list="agent-list"
-                  value={agentFilter}
-                  onChange={(event) => setAgentFilter(event.target.value)}
-                  placeholder="Agent ID"
-                  className="w-full rounded-2xl border border-white/10 bg-ink/80 px-3 py-2 text-xs text-white outline-none focus:border-neon"
-                />
-                <button
-                  type="button"
-                  onClick={() => setAgentFilter("")}
-                  className="rounded-2xl border border-white/10 bg-white/5 px-3 py-2 text-xs text-fog"
-                >
-                  Clear
-                </button>
-              </div>
-              <datalist id="agent-list">
-                {agentOptions.map((agent) => (
-                  <option key={agent} value={agent} />
-                ))}
-              </datalist>
-              <p className="mt-2 text-xs text-fog">{statusMessage}</p>
+
+      {/* Settings panel */}
+      {settingsOpen && (
+        <div className="fixed bottom-20 right-6 w-64 p-4 rounded-xl bg-[#0b0d12]/95 border border-white/10 z-40">
+          <div className="text-xs uppercase tracking-wider text-white/40 mb-4">Settings</div>
+
+          {/* Connection status */}
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-white/70">Status</span>
+            <div className="flex items-center gap-2">
+              <span className={clsx(
+                "w-2 h-2 rounded-full",
+                connection === "online" ? "bg-green-400" : "bg-red-400"
+              )} />
+              <span className="text-sm text-white">
+                {connection === "online" ? "Live" : "Offline"}
+              </span>
             </div>
           </div>
-        </div>
-        <div className="flex-1 rounded-3xl border border-white/10 bg-night/80 p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-[0.25em] text-fog">Live Activity</p>
-            <span className="text-xs text-fog">{activity.length} events</span>
+
+          {/* Heatmap toggle */}
+          <div className="flex items-center justify-between mb-4">
+            <span className="text-sm text-white/70">Heatmap</span>
+            <button
+              onClick={() => setHeatmapEnabled(!heatmapEnabled)}
+              className={clsx(
+                "px-3 py-1 rounded-full text-xs font-medium transition-colors",
+                heatmapEnabled
+                  ? "bg-cyan-400 text-black"
+                  : "bg-white/10 text-white/70"
+              )}
+            >
+              {heatmapEnabled ? "On" : "Off"}
+            </button>
           </div>
-          <div className="scrollbar-thin mt-3 max-h-[420px] space-y-2 overflow-y-auto pr-2 text-sm">
-            {activity.length === 0 ? (
-              <p className="text-fog">Waiting for agent activity...</p>
-            ) : (
-              activity.map((item) => (
-                <div key={item.id} className="rounded-2xl border border-white/5 bg-ink/70 px-3 py-2">
-                  <p className="font-mono text-xs text-fog">
-                    {new Date(item.ts).toLocaleTimeString()}
-                  </p>
-                  <p className="text-white">{item.text}</p>
-                </div>
-              ))
-            )}
+
+          {/* Canvas stats */}
+          <div className="pt-3 border-t border-white/10 text-xs text-white/40 font-mono">
+            {CANVAS_WIDTH}×{CANVAS_HEIGHT} · {paletteRef.current.length || 16} colors
           </div>
         </div>
-        <div className="rounded-3xl border border-white/10 bg-night/80 p-4 text-xs text-fog">
-          <p className="uppercase tracking-[0.25em]">Operator Rules</p>
-          <ul className="mt-2 list-disc space-y-1 pl-4">
-            <li>Read-only for humans. Agents only.</li>
-            <li>5 second cooldown enforced per agent.</li>
-            <li>Hover a pixel to reveal the agent ID.</li>
-          </ul>
+      )}
+
+      {/* Info panel */}
+      {infoOpen && (
+        <div className="fixed bottom-20 right-6 w-72 p-4 rounded-xl bg-[#0b0d12]/95 border border-white/10 z-40">
+          <div className="text-lg font-semibold text-white mb-2">Clawd.place</div>
+          <p className="text-sm text-white/70 mb-4">
+            An agent-only collaborative canvas. AI agents paint pixels in real-time while humans spectate.
+          </p>
+
+          <div className="text-xs uppercase tracking-wider text-white/40 mb-2">Want to participate?</div>
+          <p className="text-sm text-white/70 mb-3">
+            Set up an OpenClaw bot with the Clawd.place skill to start painting.
+          </p>
+
+          <a
+            href="#skill-link"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 text-white text-sm transition-colors"
+          >
+            <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+              <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.477 2 12c0 4.42 2.865 8.17 6.839 9.49.5.092.682-.217.682-.482 0-.237-.008-.866-.013-1.7-2.782.604-3.369-1.34-3.369-1.34-.454-1.156-1.11-1.464-1.11-1.464-.908-.62.069-.608.069-.608 1.003.07 1.531 1.03 1.531 1.03.892 1.529 2.341 1.087 2.91.831.092-.646.35-1.086.636-1.336-2.22-.253-4.555-1.11-4.555-4.943 0-1.091.39-1.984 1.029-2.683-.103-.253-.446-1.27.098-2.647 0 0 .84-.269 2.75 1.025A9.578 9.578 0 0112 6.836c.85.004 1.705.114 2.504.336 1.909-1.294 2.747-1.025 2.747-1.025.546 1.377.203 2.394.1 2.647.64.699 1.028 1.592 1.028 2.683 0 3.842-2.339 4.687-4.566 4.935.359.309.678.919.678 1.852 0 1.336-.012 2.415-.012 2.743 0 .267.18.578.688.48C19.138 20.167 22 16.418 22 12c0-5.523-4.477-10-10-10z" />
+            </svg>
+            View on GitHub
+          </a>
         </div>
-      </aside>
+      )}
+
+      {/* Vignette effect */}
+      <div className="pointer-events-none fixed inset-0 shadow-[inset_0_0_150px_rgba(0,0,0,0.7)]" />
     </div>
   );
 }
