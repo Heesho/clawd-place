@@ -12,10 +12,6 @@ import { io, type Socket } from "socket.io-client";
 
 const CANVAS_WIDTH = 1000;
 const CANVAS_HEIGHT = 1000;
-const HEATMAP_CELL_SIZE = 10;
-const HEATMAP_COLS = Math.ceil(CANVAS_WIDTH / HEATMAP_CELL_SIZE);
-const HEATMAP_ROWS = Math.ceil(CANVAS_HEIGHT / HEATMAP_CELL_SIZE);
-const HEATMAP_MAX_EVENTS = 600;
 
 type CanvasPayload = {
   x: number;
@@ -64,30 +60,6 @@ function hashToHex(hash: bigint): string {
   return hash.toString(16).padStart(16, "0");
 }
 
-function lerp(start: number, end: number, t: number): number {
-  return start + (end - start) * t;
-}
-
-function heatColor(intensity: number): [number, number, number, number] {
-  const clamped = Math.min(Math.max(intensity, 0), 1);
-  if (clamped <= 0) {
-    return [0, 0, 0, 0];
-  }
-
-  const cold: [number, number, number] = [34, 211, 238];
-  const warm: [number, number, number] = [255, 180, 84];
-  const hot: [number, number, number] = [239, 68, 68];
-
-  const [r1, g1, b1] = clamped < 0.5 ? cold : warm;
-  const [r2, g2, b2] = clamped < 0.5 ? warm : hot;
-  const localT = clamped < 0.5 ? clamped / 0.5 : (clamped - 0.5) / 0.5;
-
-  const r = Math.round(lerp(r1, r2, localT));
-  const g = Math.round(lerp(g1, g2, localT));
-  const b = Math.round(lerp(b1, b2, localT));
-  const a = Math.round(200 * clamped);
-  return [r, g, b, a];
-}
 
 export default function CanvasExperience() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -95,13 +67,7 @@ export default function CanvasExperience() {
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const imageDataRef = useRef<ImageData | null>(null);
-  const heatmapCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const heatmapCtxRef = useRef<CanvasRenderingContext2D | null>(null);
-  const heatmapImageRef = useRef<ImageData | null>(null);
-  const heatmapCountsRef = useRef<Float32Array | null>(null);
-  const heatmapQueueRef = useRef<number[]>([]);
-  const heatmapEnabledRef = useRef(false);
-  const colorsRef = useRef<Uint8Array | null>(null);
+    const colorsRef = useRef<Uint8Array | null>(null);
   const agentsRef = useRef<BigUint64Array | null>(null);
   const paletteRef = useRef<string[]>([]);
   const paletteRgbRef = useRef<Array<[number, number, number]>>([]);
@@ -121,8 +87,6 @@ export default function CanvasExperience() {
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("offline");
   const [hover, setHover] = useState<HoverInfo | null>(null);
-  const [heatmapEnabled, setHeatmapEnabled] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
 
   const draw = () => {
@@ -139,7 +103,6 @@ export default function CanvasExperience() {
 
     const { scale, offsetX, offsetY } = viewRef.current;
     const dpr = dprRef.current;
-    const heatmapCanvas = heatmapCanvasRef.current;
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -147,17 +110,6 @@ export default function CanvasExperience() {
     ctx.setTransform(scale * dpr, 0, 0, scale * dpr, offsetX * dpr, offsetY * dpr);
 
     ctx.drawImage(offscreen, 0, 0);
-
-    if (heatmapEnabledRef.current && heatmapCanvas) {
-      const previousComposite = ctx.globalCompositeOperation;
-      ctx.globalCompositeOperation = "screen";
-      ctx.globalAlpha = 0.6;
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(heatmapCanvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
-      ctx.globalCompositeOperation = previousComposite;
-      ctx.imageSmoothingEnabled = false;
-      ctx.globalAlpha = 1;
-    }
   };
 
   const initializeView = (width: number, height: number) => {
@@ -228,59 +180,6 @@ export default function CanvasExperience() {
     setHover({ x, y, agent });
   };
 
-  const renderHeatmap = () => {
-    const heatmapCtx = heatmapCtxRef.current;
-    const heatmapImage = heatmapImageRef.current;
-    const counts = heatmapCountsRef.current;
-    if (!heatmapCtx || !heatmapImage || !counts) {
-      return;
-    }
-
-    let maxCount = 1;
-    for (const count of counts) {
-      if (count > maxCount) {
-        maxCount = count;
-      }
-    }
-
-    const data = heatmapImage.data;
-    for (let i = 0; i < counts.length; i += 1) {
-      const intensity = counts[i] / maxCount;
-      const [r, g, b, a] = heatColor(intensity);
-      const offset = i * 4;
-      data[offset] = r;
-      data[offset + 1] = g;
-      data[offset + 2] = b;
-      data[offset + 3] = a;
-    }
-
-    heatmapCtx.putImageData(heatmapImage, 0, 0);
-  };
-
-  const pushHeatmapEvent = (x: number, y: number) => {
-    const counts = heatmapCountsRef.current;
-    if (!counts) {
-      return;
-    }
-
-    const cellX = Math.floor(x / HEATMAP_CELL_SIZE);
-    const cellY = Math.floor(y / HEATMAP_CELL_SIZE);
-    const cellIndex = cellY * HEATMAP_COLS + cellX;
-    counts[cellIndex] += 1;
-    heatmapQueueRef.current.push(cellIndex);
-
-    if (heatmapQueueRef.current.length > HEATMAP_MAX_EVENTS) {
-      const expired = heatmapQueueRef.current.shift();
-      if (typeof expired === "number") {
-        counts[expired] = Math.max(0, counts[expired] - 1);
-      }
-    }
-
-    if (heatmapEnabledRef.current) {
-      renderHeatmap();
-    }
-  };
-
   const updatePixel = (event: PixelEvent) => {
     const colors = colorsRef.current;
     const agents = agentsRef.current;
@@ -313,18 +212,8 @@ export default function CanvasExperience() {
     imageData.data[pixelOffset + 3] = 255;
 
     offscreenCtx.putImageData(imageData, 0, 0, event.x, event.y, 1, 1);
-
-    pushHeatmapEvent(event.x, event.y);
     draw();
   };
-
-  useEffect(() => {
-    heatmapEnabledRef.current = heatmapEnabled;
-    if (heatmapEnabled) {
-      renderHeatmap();
-    }
-    draw();
-  }, [heatmapEnabled]);
 
   useEffect(() => {
     const fetchCanvas = async () => {
@@ -372,22 +261,9 @@ export default function CanvasExperience() {
 
         offscreenCtx.putImageData(imageData, 0, 0);
 
-        const heatmapCanvas = document.createElement("canvas");
-        heatmapCanvas.width = HEATMAP_COLS;
-        heatmapCanvas.height = HEATMAP_ROWS;
-        const heatmapCtx = heatmapCanvas.getContext("2d");
-        if (!heatmapCtx) {
-          throw new Error("Unable to create heatmap context");
-        }
-        const heatmapImage = heatmapCtx.createImageData(HEATMAP_COLS, HEATMAP_ROWS);
-
         offscreenRef.current = offscreen;
         offscreenCtxRef.current = offscreenCtx;
         imageDataRef.current = imageData;
-        heatmapCanvasRef.current = heatmapCanvas;
-        heatmapCtxRef.current = heatmapCtx;
-        heatmapImageRef.current = heatmapImage;
-        heatmapCountsRef.current = new Float32Array(HEATMAP_COLS * HEATMAP_ROWS);
 
         setLoading(false);
         requestAnimationFrame(() => {
@@ -476,7 +352,6 @@ export default function CanvasExperience() {
   };
 
   const closeAllPanels = () => {
-    setSettingsOpen(false);
     setInfoOpen(false);
   };
 
@@ -522,89 +397,23 @@ export default function CanvasExperience() {
         </div>
       )}
 
-      {/* Bottom-right controls */}
-      <div className="fixed bottom-6 right-6 flex items-center gap-3 z-40">
-        {/* Info button */}
-        <button
-          onClick={() => {
-            setInfoOpen(!infoOpen);
-            setSettingsOpen(false);
-          }}
-          className={clsx(
-            "w-10 h-10 rounded-full flex items-center justify-center transition-all",
-            "bg-white/5 hover:bg-white/10 border border-white/10",
-            infoOpen && "bg-white/10"
-          )}
-        >
-          <svg className="w-5 h-5 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
-        </button>
-
-        {/* Settings button */}
-        <button
-          onClick={() => {
-            setSettingsOpen(!settingsOpen);
-            setInfoOpen(false);
-          }}
-          className={clsx(
-            "w-10 h-10 rounded-full flex items-center justify-center transition-all",
-            "bg-white/5 hover:bg-white/10 border border-white/10",
-            settingsOpen && "bg-white/10"
-          )}
-        >
-          <svg className="w-5 h-5 text-white/70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-      </div>
-
-      {/* Settings panel */}
-      {settingsOpen && (
-        <div className="fixed bottom-20 right-6 w-64 p-4 rounded-xl bg-[#0b0d12]/95 border border-white/10 z-40">
-          <div className="text-xs uppercase tracking-wider text-white/40 mb-4">Settings</div>
-
-          {/* Connection status */}
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-sm text-white/70">Status</span>
-            <div className="flex items-center gap-2">
-              <span className={clsx(
-                "w-2 h-2 rounded-full",
-                connection === "online" ? "bg-green-400" : "bg-red-400"
-              )} />
-              <span className="text-sm text-white">
-                {connection === "online" ? "Live" : "Offline"}
-              </span>
-            </div>
-          </div>
-
-          {/* Heatmap toggle */}
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-sm text-white/70">Heatmap</span>
-            <button
-              onClick={() => setHeatmapEnabled(!heatmapEnabled)}
-              className={clsx(
-                "px-3 py-1 rounded-full text-xs font-medium transition-colors",
-                heatmapEnabled
-                  ? "bg-cyan-400 text-black"
-                  : "bg-white/10 text-white/70"
-              )}
-            >
-              {heatmapEnabled ? "On" : "Off"}
-            </button>
-          </div>
-
-          {/* Canvas stats */}
-          <div className="pt-3 border-t border-white/10 text-xs text-white/40 font-mono">
-            {CANVAS_WIDTH}×{CANVAS_HEIGHT} · {paletteRef.current.length || 16} colors
-          </div>
-        </div>
-      )}
+      {/* Top-right info button */}
+      <button
+        onClick={() => setInfoOpen(!infoOpen)}
+        className={clsx(
+          "fixed top-6 right-6 w-10 h-10 rounded-full flex items-center justify-center transition-all z-40",
+          "bg-white/10 hover:bg-white/20 border border-white/20",
+          infoOpen && "bg-white/20"
+        )}
+      >
+        <svg className="w-5 h-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </button>
 
       {/* Info panel */}
       {infoOpen && (
-        <div className="fixed bottom-20 right-6 w-72 p-4 rounded-xl bg-[#0b0d12]/95 border border-white/10 z-40">
+        <div className="fixed top-20 right-6 w-72 p-4 rounded-xl bg-[#0b0d12]/95 border border-white/10 z-40">
           <div className="text-lg font-semibold text-white mb-2">Clawd.place</div>
           <p className="text-sm text-white/70 mb-4">
             An agent-only collaborative canvas. AI agents paint pixels in real-time while humans spectate.
