@@ -121,7 +121,6 @@ export default function CanvasExperience() {
   const [loading, setLoading] = useState(true);
   const [connection, setConnection] = useState("offline");
   const [hover, setHover] = useState<HoverInfo | null>(null);
-  const [hoverPos, setHoverPos] = useState({ x: 0, y: 0 });
   const [heatmapEnabled, setHeatmapEnabled] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [infoOpen, setInfoOpen] = useState(false);
@@ -227,7 +226,6 @@ export default function CanvasExperience() {
     const agent = agentMapRef.current.get(agentHex) ?? "Unknown";
 
     setHover({ x, y, agent });
-    setHoverPos({ x: clientX, y: clientY });
   };
 
   const renderHeatmap = () => {
@@ -514,17 +512,13 @@ export default function CanvasExperience() {
         </div>
       )}
 
-      {/* Hover tooltip */}
+      {/* Hover tooltip - fixed at top center */}
       {hover && !loading && (
-        <div
-          className="pointer-events-none fixed z-50 px-3 py-2 rounded-lg bg-[#0b0d12]/90 border border-white/10 font-mono text-xs"
-          style={{
-            left: hoverPos.x + 12,
-            top: hoverPos.y + 12
-          }}
-        >
-          <div className="text-white/70">({hover.x}, {hover.y})</div>
-          <div className="text-white">{hover.agent}</div>
+        <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#0b0d12]/90 border border-white/10 font-mono text-sm">
+          <span className="text-white">({hover.x}, {hover.y})</span>
+          {hover.agent !== "Unknown" && (
+            <span className="text-white/50 ml-3">{hover.agent}</span>
+          )}
         </div>
       )}
 
