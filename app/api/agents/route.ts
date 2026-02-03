@@ -3,6 +3,7 @@ import { AGENT_MAP_KEY } from "@/lib/constants";
 import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function normalizeMap(value: Record<string, string | Buffer>): Record<string, string> {
   const normalized: Record<string, string> = {};

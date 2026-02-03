@@ -13,6 +13,7 @@ import { PALETTE } from "@/lib/palette";
 import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const TOTAL_COLOR_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
 const TOTAL_AGENT_BYTES = TOTAL_PIXELS * AGENT_BYTES;

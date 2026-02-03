@@ -14,6 +14,7 @@ import { getRedis } from "@/lib/redis";
 import { getSocket } from "@/lib/socket";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 function jsonError(message: string, status: number, details?: Record<string, unknown>) {
   return NextResponse.json({ error: message, ...details }, { status });
