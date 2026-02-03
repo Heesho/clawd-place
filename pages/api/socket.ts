@@ -8,13 +8,14 @@ export const config = {
 };
 
 export default function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (!res.socket?.server) {
+  const socket = res.socket as any;
+  if (!socket?.server) {
     res.status(500).end();
     return;
   }
 
-  if (!(res.socket.server as any).io) {
-    (res.socket.server as any).io = initSocket(res.socket.server as any);
+  if (!socket.server.io) {
+    socket.server.io = initSocket(socket.server);
   }
 
   res.end();

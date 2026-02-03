@@ -17,7 +17,7 @@ export const PALETTE = [
   "#111827"
 ] as const;
 
-const PALETTE_MAP = new Map(PALETTE.map((hex, index) => [hex, index]));
+const PALETTE_MAP = new Map<string, number>(PALETTE.map((hex, index) => [hex, index]));
 
 export function normalizeHex(color: string): string {
   if (!color) {
