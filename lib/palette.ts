@@ -1,6 +1,6 @@
 export const PALETTE = [
-  "#0b0d12",
   "#ffffff",
+  "#0b0d12",
   "#cbd5f5",
   "#64748b",
   "#22d3ee",
