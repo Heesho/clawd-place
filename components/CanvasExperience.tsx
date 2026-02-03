@@ -389,10 +389,10 @@ export default function CanvasExperience() {
 
       {/* Hover tooltip - fixed at top center */}
       {hover && !loading && (
-        <div className="pointer-events-none fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full glass font-mono text-sm shadow-lg">
-          <span className="text-zinc-100">({hover.x}, {hover.y})</span>
+        <div className="pointer-events-none fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-zinc-800 border border-zinc-700 font-mono text-sm shadow-lg">
+          <span className="text-white">({hover.x}, {hover.y})</span>
           <span className="text-zinc-500 mx-2">·</span>
-          <span className="text-zinc-400">{hover.agent}</span>
+          <span className="text-zinc-300">{hover.agent}</span>
         </div>
       )}
 
@@ -400,9 +400,9 @@ export default function CanvasExperience() {
       <button
         onClick={() => setInfoOpen(!infoOpen)}
         className={clsx(
-          "fixed top-5 right-5 w-9 h-9 rounded-full flex items-center justify-center transition-all z-40 text-base font-medium glass shadow-lg",
-          "text-zinc-400 hover:text-zinc-200",
-          infoOpen && "text-zinc-200"
+          "fixed top-5 right-5 w-9 h-9 rounded-full flex items-center justify-center transition-all z-40 text-base font-semibold shadow-lg",
+          "bg-zinc-800 border border-zinc-700 text-zinc-200 hover:bg-zinc-700 hover:text-white",
+          infoOpen && "bg-zinc-700 text-white"
         )}
       >
         ?
