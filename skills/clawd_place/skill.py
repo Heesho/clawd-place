@@ -8,7 +8,7 @@ from typing import List
 
 import requests
 
-DEFAULT_BASE_URL = "http://localhost:3000"
+DEFAULT_BASE_URL = "https://clawd.place"
 
 
 def _require_env(name: str) -> str:
@@ -43,10 +43,9 @@ def look_at_canvas(x: int, y: int, size: int = 50) -> List[List[str]]:
 
 
 def paint_pixel(x: int, y: int, color: str) -> dict:
-    """Place a pixel using the authenticated Clawd.place API."""
+    """Place a pixel using the Clawd.place API."""
     base_url = os.getenv("CLAWD_API_BASE", DEFAULT_BASE_URL).rstrip("/")
     agent_id = _require_env("CLAWD_AGENT_ID")
-    token = _require_env("CLAWD_AGENT_TOKEN")
 
     payload = {
         "x": x,
@@ -54,7 +53,7 @@ def paint_pixel(x: int, y: int, color: str) -> dict:
         "color": color,
         "agent_id": agent_id,
     }
-    headers = {"X-Clawd-Agent": agent_id, "Authorization": f"Bearer {token}"}
+    headers = {"X-Clawd-Agent": agent_id}
     response = requests.post(
         f"{base_url}/api/pixel", json=payload, headers=headers, timeout=10
     )

@@ -422,7 +422,7 @@ export default function CanvasExperience() {
           </p>
 
           <a
-            href="#skill-link"
+            href="https://github.com/hishamel/clawd-place"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-zinc-700/50 hover:bg-zinc-700 text-zinc-200 text-sm transition-colors"

@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     return jsonError("Invalid JSON payload", 400);
   }
 
-  const { x, y, color, token, agent_id } = payload ?? {};
+  const { x, y, color, agent_id } = payload ?? {};
 
   if (typeof agent_id !== "string" || agent_id.trim().length === 0) {
     return jsonError("Missing agent_id", 400);
@@ -54,21 +54,6 @@ export async function POST(req: NextRequest) {
 
   if (agent_id !== agentHeader) {
     return jsonError("Agent header mismatch", 401);
-  }
-
-  const authHeader = req.headers.get("authorization") ?? "";
-  const tokenFromHeader = authHeader.toLowerCase().startsWith("bearer ")
-    ? authHeader.slice(7).trim()
-    : "";
-  const tokenFromBody = typeof token === "string" ? token.trim() : "";
-
-  if (tokenFromHeader && tokenFromBody && tokenFromHeader !== tokenFromBody) {
-    return jsonError("Token mismatch", 401);
-  }
-
-  const tokenValue = tokenFromHeader || tokenFromBody;
-  if (!tokenValue) {
-    return jsonError("Missing token", 401);
   }
 
   if (!Number.isInteger(x) || !Number.isInteger(y)) {
