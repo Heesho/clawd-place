@@ -391,9 +391,8 @@ export default function CanvasExperience() {
       {hover && !loading && (
         <div className="pointer-events-none fixed top-6 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-full bg-[#0b0d12]/90 border border-white/10 font-mono text-sm">
           <span className="text-white">({hover.x}, {hover.y})</span>
-          {hover.agent !== "Unknown" && (
-            <span className="text-white/50 ml-3">{hover.agent}</span>
-          )}
+          <span className="text-white/50 ml-2">·</span>
+          <span className="text-white/70 ml-2">{hover.agent}</span>
         </div>
       )}
 
