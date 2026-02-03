@@ -14,6 +14,23 @@ import { getSocket } from "@/lib/socket";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const MOLTBOOK_API = "https://www.moltbook.com/api/v1";
+const MOLTBOOK_APP_KEY = process.env.MOLTBOOK_APP_KEY;
+
+type MoltbookAgent = {
+  id: string;
+  name: string;
+  description: string;
+  karma: number;
+  avatar_url: string;
+  claimed: boolean;
+  created_at: string;
+};
+
+type VerifyResponse = {
+  agent: MoltbookAgent;
+};
+
 function jsonError(message: string, status: number, details?: Record<string, unknown>) {
   return NextResponse.json({ error: message, ...details }, { status });
 }
@@ -31,10 +48,58 @@ function isSetOk(result: unknown): boolean {
   return false;
 }
 
+async function verifyMoltbookIdentity(token: string): Promise<MoltbookAgent | null> {
+  if (!MOLTBOOK_APP_KEY) {
+    return null;
+  }
+
+  try {
+    const response = await fetch(`${MOLTBOOK_API}/agents/verify-identity`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Moltbook-App-Key": MOLTBOOK_APP_KEY
+      },
+      body: JSON.stringify({ token })
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = (await response.json()) as VerifyResponse;
+    return data.agent;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest) {
-  const agentHeader = req.headers.get("x-clawd-agent");
-  if (!agentHeader) {
-    return jsonError("Missing X-Clawd-Agent header", 401);
+  const identityToken = req.headers.get("x-moltbook-identity");
+
+  let agentId: string;
+  let verified = false;
+
+  if (MOLTBOOK_APP_KEY) {
+    if (!identityToken) {
+      return jsonError("Missing X-Moltbook-Identity header", 401, {
+        hint: "Get an identity token from POST https://www.moltbook.com/api/v1/agents/me/identity-token"
+      });
+    }
+
+    const agent = await verifyMoltbookIdentity(identityToken);
+    if (!agent) {
+      return jsonError("Invalid or expired identity token", 401);
+    }
+
+    agentId = agent.name;
+    verified = true;
+  } else {
+    const fallbackHeader = req.headers.get("x-clawd-agent");
+    if (!fallbackHeader) {
+      return jsonError("Missing X-Clawd-Agent header", 401);
+    }
+    agentId = fallbackHeader;
   }
 
   let payload: any;
@@ -44,15 +109,7 @@ export async function POST(req: NextRequest) {
     return jsonError("Invalid JSON payload", 400);
   }
 
-  const { x, y, color, agent_id } = payload ?? {};
-
-  if (typeof agent_id !== "string" || agent_id.trim().length === 0) {
-    return jsonError("Missing agent_id", 400);
-  }
-
-  if (agent_id !== agentHeader) {
-    return jsonError("Agent header mismatch", 401);
-  }
+  const { x, y, color } = payload ?? {};
 
   if (!Number.isInteger(x) || !Number.isInteger(y)) {
     return jsonError("x and y must be integers", 400);
@@ -78,7 +135,7 @@ export async function POST(req: NextRequest) {
   }
 
   const redis = getRedis();
-  const cooldownKey = `agent:cooldown:${agent_id}`;
+  const cooldownKey = `agent:cooldown:${agentId}`;
   const cooldownSet = await redis.set(cooldownKey, "1", "EX", COOLDOWN_SECONDS, "NX");
 
   if (!isSetOk(cooldownSet)) {
@@ -99,7 +156,7 @@ export async function POST(req: NextRequest) {
 
   const pipeline = redis.multi();
   pipeline.bitfield(CANVAS_KEY, "SET", `u${BITS_PER_PIXEL}`, colorOffset, colorIndex);
-  pipeline.hset(AGENTS_KEY, pixelKey, agent_id);
+  pipeline.hset(AGENTS_KEY, pixelKey, agentId);
   await pipeline.exec();
 
   const timestamp = Date.now();
@@ -109,7 +166,7 @@ export async function POST(req: NextRequest) {
       x,
       y,
       color: normalizedColor,
-      agent_id,
+      agent_id: agentId,
       ts: timestamp
     });
   }
@@ -119,7 +176,8 @@ export async function POST(req: NextRequest) {
     x,
     y,
     color: normalizedColor,
-    agent_id,
+    agent_id: agentId,
+    verified,
     ts: timestamp
   });
 }

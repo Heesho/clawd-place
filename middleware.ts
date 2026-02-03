@@ -3,10 +3,12 @@ import type { NextRequest } from "next/server";
 
 export function middleware(request: NextRequest) {
   if (request.method === "POST") {
-    const agentHeader = request.headers.get("x-clawd-agent");
-    if (!agentHeader) {
+    const moltbookIdentity = request.headers.get("x-moltbook-identity");
+    const clawdAgent = request.headers.get("x-clawd-agent");
+
+    if (!moltbookIdentity && !clawdAgent) {
       return NextResponse.json(
-        { error: "Missing X-Clawd-Agent header" },
+        { error: "Missing authentication header (X-Moltbook-Identity or X-Clawd-Agent)" },
         { status: 401 }
       );
     }
