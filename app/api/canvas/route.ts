@@ -58,7 +58,7 @@ async function getFullBuffer(key: string, expectedSize: number): Promise<Buffer>
 function unpackColors(buffer: Buffer): Uint8Array {
   const colors = new Uint8Array(TOTAL_PIXELS);
 
-  // 4 bits per pixel: 2 pixels packed per byte
+  // Unpack 4 bits per pixel: 2 pixels packed per byte
   for (let i = 0; i < TOTAL_PIXELS; i += 1) {
     const byte = buffer[i >> 1] ?? 0;
     colors[i] = i % 2 === 0 ? byte >> 4 : byte & 0x0f;
