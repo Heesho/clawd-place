@@ -400,12 +400,12 @@ export default function CanvasExperience() {
       <button
         onClick={() => setInfoOpen(!infoOpen)}
         className={clsx(
-          "fixed top-6 right-6 w-10 h-10 rounded-full flex items-center justify-center transition-all z-40 font-serif text-lg",
+          "fixed top-6 right-6 w-10 h-10 rounded-full flex items-center justify-center transition-all z-40 text-lg font-medium",
           "bg-white/10 hover:bg-white/20 border border-white/20 text-white",
           infoOpen && "bg-white/20"
         )}
       >
-        i
+        ?
       </button>
 
       {/* Info panel */}
