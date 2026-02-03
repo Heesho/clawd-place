@@ -20,8 +20,7 @@ type CanvasPayload = {
   height: number;
   palette: string[];
   colors: string;
-  agents: string;
-  agent_map: Record<string, string>;
+  agents: Record<string, string>;
 };
 
 type PixelEvent = {
@@ -29,7 +28,6 @@ type PixelEvent = {
   y: number;
   color: string;
   agent_id: string;
-  agent_hash: string;
   ts: number;
 };
 
@@ -56,22 +54,16 @@ function hexToRgb(hex: string): [number, number, number] {
   return [r, g, b];
 }
 
-function hashToHex(hash: bigint): string {
-  return hash.toString(16).padStart(16, "0");
-}
-
-
 export default function CanvasExperience() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenRef = useRef<HTMLCanvasElement | null>(null);
   const offscreenCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const imageDataRef = useRef<ImageData | null>(null);
-    const colorsRef = useRef<Uint8Array | null>(null);
-  const agentsRef = useRef<BigUint64Array | null>(null);
+  const colorsRef = useRef<Uint8Array | null>(null);
+  const agentsRef = useRef<Map<string, string>>(new Map());
   const paletteRef = useRef<string[]>([]);
   const paletteRgbRef = useRef<Array<[number, number, number]>>([]);
-  const agentMapRef = useRef<Map<string, string>>(new Map());
   const socketRef = useRef<Socket | null>(null);
   const dprRef = useRef(1);
   const viewRef = useRef({
@@ -156,8 +148,7 @@ export default function CanvasExperience() {
   const updateHover = (clientX: number, clientY: number) => {
     const canvas = canvasRef.current;
     const colors = colorsRef.current;
-    const agents = agentsRef.current;
-    if (!canvas || !colors || !agents) {
+    if (!canvas || !colors) {
       return;
     }
     const rect = canvas.getBoundingClientRect();
@@ -172,23 +163,20 @@ export default function CanvasExperience() {
       return;
     }
 
-    const index = y * CANVAS_WIDTH + x;
-    const agentHash = agents[index];
-    const agentHex = hashToHex(agentHash);
-    const agent = agentMapRef.current.get(agentHex) ?? "Unknown";
+    const pixelKey = `${x},${y}`;
+    const agent = agentsRef.current.get(pixelKey) ?? "Unclaimed";
 
     setHover({ x, y, agent });
   };
 
   const updatePixel = (event: PixelEvent) => {
     const colors = colorsRef.current;
-    const agents = agentsRef.current;
     const imageData = imageDataRef.current;
     const offscreenCtx = offscreenCtxRef.current;
     const palette = paletteRef.current;
     const paletteRgb = paletteRgbRef.current;
 
-    if (!colors || !agents || !imageData || !offscreenCtx) {
+    if (!colors || !imageData || !offscreenCtx) {
       return;
     }
 
@@ -200,9 +188,8 @@ export default function CanvasExperience() {
     const index = event.y * CANVAS_WIDTH + event.x;
     colors[index] = colorIndex;
 
-    const agentHash = BigInt(`0x${event.agent_hash}`);
-    agents[index] = agentHash;
-    agentMapRef.current.set(event.agent_hash, event.agent_id);
+    const pixelKey = `${event.x},${event.y}`;
+    agentsRef.current.set(pixelKey, event.agent_id);
 
     const pixelOffset = index * 4;
     const [r, g, b] = paletteRgb[colorIndex] ?? [0, 0, 0];
@@ -221,24 +208,17 @@ export default function CanvasExperience() {
         const response = await fetch("/api/canvas");
         const data = (await response.json()) as CanvasPayload;
         const colorsBytes = base64ToUint8(data.colors);
-        const agentsBytes = base64ToUint8(data.agents);
 
         const colors = new Uint8Array(
           colorsBytes.buffer,
           colorsBytes.byteOffset,
           data.width * data.height
         );
-        const agents = new BigUint64Array(
-          agentsBytes.buffer,
-          agentsBytes.byteOffset,
-          data.width * data.height
-        );
 
         colorsRef.current = colors;
-        agentsRef.current = agents;
+        agentsRef.current = new Map(Object.entries(data.agents || {}));
         paletteRef.current = data.palette;
         paletteRgbRef.current = data.palette.map(hexToRgb);
-        agentMapRef.current = new Map(Object.entries(data.agent_map || {}));
 
         const offscreen = document.createElement("canvas");
         offscreen.width = data.width;
@@ -422,7 +402,7 @@ export default function CanvasExperience() {
           </p>
 
           <a
-            href="https://github.com/hishamel/clawd-place"
+            href="https://github.com/Heesho/clawd-place"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-zinc-700/50 hover:bg-zinc-700 text-zinc-200 text-sm transition-colors"

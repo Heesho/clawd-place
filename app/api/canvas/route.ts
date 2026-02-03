@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  AGENT_BYTES,
-  AGENT_KEY,
-  AGENT_MAP_KEY,
+  AGENTS_KEY,
   BITS_PER_PIXEL,
   CANVAS_HEIGHT,
   CANVAS_KEY,
@@ -16,7 +14,6 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TOTAL_COLOR_BYTES = Math.ceil((TOTAL_PIXELS * BITS_PER_PIXEL) / 8);
-const TOTAL_AGENT_BYTES = TOTAL_PIXELS * AGENT_BYTES;
 
 function parseIntParam(value: string | null, fallback: number): number {
   if (!value) {
@@ -59,7 +56,6 @@ async function getFullBuffer(key: string, expectedSize: number): Promise<Buffer>
 function unpackColors(buffer: Buffer): Uint8Array {
   const colors = new Uint8Array(TOTAL_PIXELS);
 
-  // Unpack 4 bits per pixel: 2 pixels packed per byte
   for (let i = 0; i < TOTAL_PIXELS; i += 1) {
     const byte = buffer[i >> 1] ?? 0;
     colors[i] = i % 2 === 0 ? byte >> 4 : byte & 0x0f;
@@ -81,26 +77,6 @@ function sliceRegionFromArray(
     const srcEnd = srcStart + width;
     output.set(source.subarray(srcStart, srcEnd), row * width);
   }
-  return output;
-}
-
-function sliceRegionBuffer(
-  source: Buffer,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  bytesPerPixel: number
-): Buffer {
-  const rowBytes = width * bytesPerPixel;
-  const output = Buffer.alloc(rowBytes * height);
-
-  for (let row = 0; row < height; row += 1) {
-    const srcStart = ((y + row) * CANVAS_WIDTH + x) * bytesPerPixel;
-    const srcEnd = srcStart + rowBytes;
-    source.copy(output, row * rowBytes, srcStart, srcEnd);
-  }
-
   return output;
 }
 
@@ -129,18 +105,16 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Region out of bounds" }, { status: 400 });
   }
 
-  const [colorBuffer, agentBuffer] = await Promise.all([
+  const redis = getRedis();
+
+  const [colorBuffer, agentsRaw] = await Promise.all([
     getFullBuffer(CANVAS_KEY, TOTAL_COLOR_BYTES),
-    getFullBuffer(AGENT_KEY, TOTAL_AGENT_BYTES)
+    redis.hgetall(AGENTS_KEY)
   ]);
 
   const colors = unpackColors(colorBuffer);
   const slicedColors = sliceRegionFromArray(colors, x, y, width, height);
-  const slicedAgents = sliceRegionBuffer(agentBuffer, x, y, width, height, AGENT_BYTES);
-
-  const redis = getRedis();
-  const agentMapRaw = await redis.hgetall(AGENT_MAP_KEY);
-  const agentMap = normalizeMap(agentMapRaw as Record<string, string | Buffer>);
+  const agents = normalizeMap(agentsRaw as Record<string, string | Buffer>);
 
   return NextResponse.json({
     x,
@@ -148,15 +122,7 @@ export async function GET(request: NextRequest) {
     width,
     height,
     palette: PALETTE,
-    format: {
-      color: "palette_index_u8",
-      agent: "u64_hash"
-    },
-    storage: {
-      bits_per_pixel: BITS_PER_PIXEL
-    },
     colors: Buffer.from(slicedColors).toString("base64"),
-    agents: slicedAgents.toString("base64"),
-    agent_map: agentMap
+    agents
   });
 }

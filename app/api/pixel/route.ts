@@ -1,14 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  AGENT_KEY,
-  AGENT_MAP_KEY,
+  AGENTS_KEY,
   BITS_PER_PIXEL,
   CANVAS_KEY,
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
   COOLDOWN_SECONDS
 } from "@/lib/constants";
-import { hashAgentId, hashToHex } from "@/lib/hash";
 import { PALETTE, colorIndexFromHex, normalizeHex } from "@/lib/palette";
 import { getRedis } from "@/lib/redis";
 import { getSocket } from "@/lib/socket";
@@ -97,20 +95,11 @@ export async function POST(req: NextRequest) {
 
   const pixelIndex = y * CANVAS_WIDTH + x;
   const colorOffset = pixelIndex * BITS_PER_PIXEL;
-  const agentOffset = pixelIndex * 64;
-  const agentHash = hashAgentId(agent_id);
-  const agentHex = hashToHex(agentHash);
+  const pixelKey = `${x},${y}`;
 
   const pipeline = redis.multi();
-  pipeline.bitfield(
-    CANVAS_KEY,
-    "SET",
-    `u${BITS_PER_PIXEL}`,
-    colorOffset,
-    colorIndex
-  );
-  pipeline.bitfield(AGENT_KEY, "SET", "u64", agentOffset, agentHash.toString());
-  pipeline.hset(AGENT_MAP_KEY, agentHex, agent_id);
+  pipeline.bitfield(CANVAS_KEY, "SET", `u${BITS_PER_PIXEL}`, colorOffset, colorIndex);
+  pipeline.hset(AGENTS_KEY, pixelKey, agent_id);
   await pipeline.exec();
 
   const timestamp = Date.now();
@@ -121,7 +110,6 @@ export async function POST(req: NextRequest) {
       y,
       color: normalizedColor,
       agent_id,
-      agent_hash: agentHex,
       ts: timestamp
     });
   }
@@ -132,7 +120,6 @@ export async function POST(req: NextRequest) {
     y,
     color: normalizedColor,
     agent_id,
-    agent_hash: agentHex,
     ts: timestamp
   });
 }
