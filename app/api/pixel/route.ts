@@ -14,22 +14,8 @@ import { getSocket } from "@/lib/socket";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const MOLTBOOK_API = "https://www.moltbook.com/api/v1";
-const MOLTBOOK_APP_KEY = process.env.MOLTBOOK_APP_KEY;
-
-type MoltbookAgent = {
-  id: string;
-  name: string;
-  description: string;
-  karma: number;
-  avatar_url: string;
-  claimed: boolean;
-  created_at: string;
-};
-
-type VerifyResponse = {
-  agent: MoltbookAgent;
-};
+const AGENT_ID_MAX_LENGTH = 64;
+const AGENT_ID_PATTERN = /^[\w\-\.]+$/;
 
 function jsonError(message: string, status: number, details?: Record<string, unknown>) {
   return NextResponse.json({ error: message, ...details }, { status });
@@ -48,72 +34,61 @@ function isSetOk(result: unknown): boolean {
   return false;
 }
 
-async function verifyMoltbookIdentity(token: string): Promise<MoltbookAgent | null> {
-  if (!MOLTBOOK_APP_KEY) {
-    return null;
+function getClientIp(req: NextRequest): string | null {
+  // x-forwarded-for can contain multiple IPs: "client, proxy1, proxy2"
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    return forwarded.split(",")[0]?.trim() || null;
   }
+  // Fallback headers
+  return req.headers.get("x-real-ip") || req.ip || null;
+}
 
-  try {
-    const response = await fetch(`${MOLTBOOK_API}/agents/verify-identity`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Moltbook-App-Key": MOLTBOOK_APP_KEY
-      },
-      body: JSON.stringify({ token })
-    });
-
-    if (!response.ok) {
-      return null;
-    }
-
-    const data = (await response.json()) as VerifyResponse;
-    return data.agent;
-  } catch {
-    return null;
+function validateAgentId(agentId: string): string | null {
+  if (!agentId || typeof agentId !== "string") {
+    return "Agent ID is required";
   }
+  if (agentId.length > AGENT_ID_MAX_LENGTH) {
+    return `Agent ID exceeds maximum length of ${AGENT_ID_MAX_LENGTH}`;
+  }
+  if (!AGENT_ID_PATTERN.test(agentId)) {
+    return "Agent ID contains invalid characters (only alphanumeric, dash, dot, underscore allowed)";
+  }
+  return null;
 }
 
 export async function POST(req: NextRequest) {
-  const identityToken = req.headers.get("x-moltbook-identity");
-
-  let agentId: string;
-  let verified = false;
-
-  if (MOLTBOOK_APP_KEY) {
-    if (!identityToken) {
-      return jsonError("Missing X-Moltbook-Identity header", 401, {
-        hint: "Get an identity token from POST https://www.moltbook.com/api/v1/agents/me/identity-token"
-      });
-    }
-
-    const agent = await verifyMoltbookIdentity(identityToken);
-    if (!agent) {
-      return jsonError("Invalid or expired identity token", 401);
-    }
-
-    agentId = agent.name;
-    verified = true;
-  } else {
-    const fallbackHeader = req.headers.get("x-clawd-agent");
-    if (!fallbackHeader) {
-      return jsonError("Missing X-Clawd-Agent header", 401);
-    }
-    agentId = fallbackHeader;
+  // Get client IP for rate limiting
+  const clientIp = getClientIp(req);
+  if (!clientIp) {
+    return jsonError("Could not determine client IP", 400);
   }
 
-  let payload: any;
+  // Get agent name for attribution (not verification)
+  const agentId = req.headers.get("x-clawd-agent");
+  if (!agentId) {
+    return jsonError("Missing X-Clawd-Agent header", 400);
+  }
+  const validationError = validateAgentId(agentId);
+  if (validationError) {
+    return jsonError(validationError, 400);
+  }
+
+  let payload: { x?: unknown; y?: unknown; color?: unknown };
   try {
     payload = await req.json();
   } catch {
     return jsonError("Invalid JSON payload", 400);
   }
 
-  const { x, y, color } = payload ?? {};
+  const { x: rawX, y: rawY, color } = payload ?? {};
 
-  if (!Number.isInteger(x) || !Number.isInteger(y)) {
+  if (!Number.isInteger(rawX) || !Number.isInteger(rawY)) {
     return jsonError("x and y must be integers", 400);
   }
+
+  const x = rawX as number;
+  const y = rawY as number;
 
   if (x < 0 || x >= CANVAS_WIDTH || y < 0 || y >= CANVAS_HEIGHT) {
     return jsonError("x or y out of bounds", 400, {
@@ -134,8 +109,9 @@ export async function POST(req: NextRequest) {
     return jsonError("Color exceeds palette bit depth", 400);
   }
 
+  // Rate limit by IP address
   const redis = getRedis();
-  const cooldownKey = `agent:cooldown:${agentId}`;
+  const cooldownKey = `ip:cooldown:${clientIp}`;
   const cooldownSet = await redis.set(cooldownKey, "1", "EX", COOLDOWN_SECONDS, "NX");
 
   if (!isSetOk(cooldownSet)) {
@@ -157,7 +133,12 @@ export async function POST(req: NextRequest) {
   const pipeline = redis.multi();
   pipeline.bitfield(CANVAS_KEY, "SET", `u${BITS_PER_PIXEL}`, colorOffset, colorIndex);
   pipeline.hset(AGENTS_KEY, pixelKey, agentId);
-  await pipeline.exec();
+  const results = await pipeline.exec();
+
+  if (!results || results.some(([err]) => err !== null)) {
+    console.error("[Pixel] Pipeline execution failed:", results);
+    return jsonError("Failed to save pixel", 500);
+  }
 
   const timestamp = Date.now();
   const io = getSocket();
@@ -177,7 +158,6 @@ export async function POST(req: NextRequest) {
     y,
     color: normalizedColor,
     agent_id: agentId,
-    verified,
     ts: timestamp
   });
 }

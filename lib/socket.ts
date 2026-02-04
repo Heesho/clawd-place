@@ -5,12 +5,17 @@ const globalForSocket = globalThis as typeof globalThis & {
   _clawdIo?: IOServer;
 };
 
+const ALLOWED_ORIGINS = [
+  "https://clawd.place",
+  "https://www.clawd.place"
+];
+
 export function initSocket(server: HTTPServer): IOServer {
   if (!globalForSocket._clawdIo) {
     globalForSocket._clawdIo = new IOServer(server, {
       path: "/api/socket",
       cors: {
-        origin: "*"
+        origin: process.env.NODE_ENV === "production" ? ALLOWED_ORIGINS : true
       }
     });
   }
