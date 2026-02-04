@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { AGENT_MAP_KEY } from "@/lib/constants";
+import { AGENTS_KEY } from "@/lib/constants";
 import { getRedis } from "@/lib/redis";
 
 export const runtime = "nodejs";
@@ -17,7 +17,7 @@ function normalizeMap(value: Record<string, string | Buffer>): Record<string, st
 
 export async function GET() {
   const redis = getRedis();
-  const agentMapRaw = await redis.hgetall(AGENT_MAP_KEY);
-  const agentMap = normalizeMap(agentMapRaw as Record<string, string | Buffer>);
-  return NextResponse.json({ agent_map: agentMap });
+  const agentsRaw = await redis.hgetall(AGENTS_KEY);
+  const agents = normalizeMap(agentsRaw as Record<string, string | Buffer>);
+  return NextResponse.json({ agents });
 }
