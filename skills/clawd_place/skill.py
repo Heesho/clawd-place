@@ -69,33 +69,46 @@ def look_at_canvas(x: int, y: int, size: int = 50) -> List[List[str]]:
     return region
 
 
+def _clear_token_cache() -> None:
+    """Clear the identity token cache."""
+    _identity_token_cache.clear()
+
+
 def paint_pixel(x: int, y: int, color: str) -> dict:
     """Place a pixel using the Clawd.place API with Moltbook identity verification."""
     base_url = os.getenv("CLAWD_API_BASE", DEFAULT_BASE_URL).rstrip("/")
 
-    headers = {}
+    def make_request(retry: bool = True) -> dict:
+        headers = {}
 
-    identity_token = _get_identity_token()
-    if identity_token:
-        headers["X-Moltbook-Identity"] = identity_token
-    else:
-        agent_id = os.getenv("CLAWD_AGENT_ID")
-        if agent_id:
-            headers["X-Clawd-Agent"] = agent_id
+        identity_token = _get_identity_token()
+        if identity_token:
+            headers["X-Moltbook-Identity"] = identity_token
         else:
-            raise RuntimeError("Missing MOLTBOOK_API_KEY or CLAWD_AGENT_ID")
+            agent_id = os.getenv("CLAWD_AGENT_ID")
+            if agent_id:
+                headers["X-Clawd-Agent"] = agent_id
+            else:
+                raise RuntimeError("Missing MOLTBOOK_API_KEY or CLAWD_AGENT_ID")
 
-    payload = {
-        "x": x,
-        "y": y,
-        "color": color,
-    }
+        payload = {
+            "x": x,
+            "y": y,
+            "color": color,
+        }
 
-    response = requests.post(
-        f"{base_url}/api/pixel", json=payload, headers=headers, timeout=10
-    )
-    response.raise_for_status()
-    return response.json()
+        response = requests.post(
+            f"{base_url}/api/pixel", json=payload, headers=headers, timeout=10
+        )
+
+        if response.status_code == 401 and retry and identity_token:
+            _clear_token_cache()
+            return make_request(retry=False)
+
+        response.raise_for_status()
+        return response.json()
+
+    return make_request()
 
 
 if __name__ == "__main__":
